@@ -6,79 +6,101 @@ from datetime import datetime
 
 import boto3
 
+from model import UserTable
 from slack_helper import Slack
-from weather import WeatherClient
+from weather import WeatherClient, filter_weathers
 
 
 def handler(event, context):
     app_id = os.environ["APPID"]
-    longitude, latitude = os.environ["LONGITUDE"], os.environ["LATITUDE"]
-    slackurl = os.environ["SLACK_URL"]
     table_name = os.environ["TABLE"]
-    manager = WeatherClient(app_id, (longitude, latitude))
-    slack = Slack(slackurl)
-    app = App(table_name)
-    message = app.send_slack_if_rain(manager, slack)
-    return {
-        'message': message
-    }
+    dynamodb = boto3.resource('dynamodb')
+    table = UserTable(dynamodb.Table(table_name))
+    weather_client = WeatherClient(app_id)
+    main_handler = MainRunner(table, weather_client)
+    main_handler.run()
 
 
-class App:
-    def __init__(self, table_name):
-        dynamodb = boto3.resource('dynamodb')
-        self.table = dynamodb.Table(table_name)
-        self.send_slack = self.need_send_slack()
+class MainRunner:
+    def __init__(self, table: UserTable, weather_client: WeatherClient):
+        self.table = table
+        self.weather_client = weather_client
 
-    def send_slack_if_rain(self, manager, slack):
+    def run(self):
+        for user in self.table.get_users():
+            print(user)
+            try:
+                ApplicationRunner(UserTable.UserModel(user), self.weather_client, self.table.change_status).run()
+            except Exception as e:
+                print(e)
+
+
+class ApplicationRunner:
+    def __init__(self, user, weather_client, change_status):
         """
-        If it can get 'weathers' have Rainfall data, it send message to slack url.
 
-        :type manager: WeatherClient
-        :type slack: Slack
-        :return:
+        :param user: UserTable
+        :param weather_client:
+        :param change_status: (userid, need_send_slack)-> None
+        :type change_status: (int,bool)->None
         """
-        info = manager.get()
-        weathers = info["Feature"][0]["Property"]["WeatherList"]["Weather"]
-        rain_type = self.__is_raining(weathers)
-        message = None
-        if rain_type == "observation":
-            message = "雨が降っています。"
-        elif rain_type == "forecast":
-            message = "雨が１時間以内に降るかもしれません。"
+        self.user = user
+        self.weather_client = weather_client
+        self.change_status = change_status
+        self.slack = Slack(self.user.slack_url)
 
-        now_need = self.send_slack
-        if message is not None:
-            if self.send_slack:
-                slack.send(message)
-                self.send_slack = False
+    def run(self):
+        """
+        If 'weathers' have Rainfall data, send the message to slack url.
+
+        """
+        coordinates = (self.user.longitude, self.user.latitude)
+        info = self.weather_client.weather_info(coordinates)
+        send_slack = self.user.need_send_slack
+        weathers = filter_weathers(info, self.__is_raining)
+
+        now_need = send_slack
+        if len(weathers) > 0:
+            if now_need:
+                message = self.create_message(weathers, [self.weather_client.map_url(coordinates)])
+                self.slack.send(message)
+                send_slack = False
         else:
-            self.send_slack = True
-        if now_need != self.send_slack:
-            self.update_need_send_slack(self.send_slack)
-
-        return message
-
-    def need_send_slack(self):
-        response = self.table.get_item(Key={
-            'userid': 1
-        })
-        return response["Item"]["need_send_slack"]
-
-    def update_need_send_slack(self, need):
-        self.table.update_item(
-            Key={
-                'userid': 1
-            },
-            UpdateExpression='SET need_send_slack = :val1',
-            ExpressionAttributeValues={
-                ':val1': need
-            })
+            send_slack = True
+        if now_need != send_slack:
+            self.change_status(self.user.id, send_slack)
 
     @staticmethod
-    def __is_raining(weathers):
+    def __is_raining(weather):
         """
         If 'weathers' have Rainfall data, return weather Type. (ex. "observation" or "forecast")
+
+        :param weather:
+        {
+            "Type": "observation" or "forecast"
+            "Date": "201812221850"
+            "Railfall": 10.00 * not need
+        }
+        :type weather: dict[str,any]
+        :return: "observation" or "forecast" or None
+        """
+
+        def __is_rainfall(weather):
+            rainfall = weather.get("Rainfall", 0)
+            return rainfall != 0.0
+
+        now = datetime.now()
+        weather_type = weather["Type"]
+        date = datetime.strptime(weather["Date"], "%Y%m%d%H%M")
+        if weather_type == "observation" and (now - date).total_seconds() <= 10 * 60:
+            return __is_rainfall(weather)
+        elif weather_type == "forecast":
+            return __is_rainfall(weather)
+
+    @staticmethod
+    def create_message(weathers, messages):
+        """
+        create message for send slack
 
         :param weathers:
         [{
@@ -86,21 +108,20 @@ class App:
             "Date": "201812221850"
             "Railfall": 10.00 * not need
         }]
-        :type weathers: list[dict[str,any]]
-        :return: "observation" or "forecast" or None
+        :type weathers: list[dict[str,str]]
+        :type messages: list[str]
+        :return:
         """
+        ms = list()
+        if len(weathers) > 0:
+            first_rain = weathers[0]
+            rain_type = first_rain.get("Type")
+            if rain_type == "observation":
+                ms.append("雨が降っています。")
+            elif rain_type == "forecast":
+                date = datetime.strptime(first_rain["Date"], "%Y%m%d%H%M")
+                ms.append("雨が{}ごろから降るかもしれません。".format(date.strftime("%H:%M")))
 
-        def __is_rainfall(weather):
-            rainfall = weather.get("Rainfall")
-            return rainfall is not None and rainfall != 0.0
+        ms.extend(messages)
+        return "\n".join(ms)
 
-        now = datetime.now()
-        for weather in weathers:
-            weather_type = weather["Type"]
-            date = datetime.strptime(weather["Date"], "%Y%m%d%H%M")
-            if weather_type == "observation" and (now - date).total_seconds() <= 10 * 60:
-                if __is_rainfall(weather):
-                    return weather_type
-            elif weather_type == "forecast":
-                if __is_rainfall(weather):
-                    return weather_type
