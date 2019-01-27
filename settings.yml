@@ -1,0 +1,7 @@
+datetime_format: "%Y%m%d%H%M"
+system_id: 1
+need_send_slack:
+  elapsed_hours: 8
+weather:
+  map_zoom: 13
+  interval: 5

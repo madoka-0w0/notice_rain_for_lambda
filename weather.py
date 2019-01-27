@@ -2,6 +2,11 @@ import json
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
+import settings
+
+INTERVAL = settings.interval()
+MAP_ZOOM = settings.weather_map_zoom()
+
 
 class WeatherClient:
     BASE_URL = "http://weather.olp.yahooapis.jp/v1/place"
@@ -25,7 +30,7 @@ class WeatherClient:
             "appid": self.app_id,
             "coordinates": "{},{}".format(*coordinates),
             "output": "json",
-            "interval": 5
+            "interval": INTERVAL
         }))
         with urlopen(url) as res:
             return json.loads(res.read().decode('utf-8'))
@@ -42,7 +47,7 @@ class WeatherClient:
         url = "{}?{}".format(WeatherClient.MAP_URL, urlencode({
             "lon": coordinates[0],
             "lat": coordinates[1],
-            "z": 13
+            "z": MAP_ZOOM
         }))
         return url
 
