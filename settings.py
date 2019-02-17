@@ -34,3 +34,27 @@ def weather_map_zoom():
 
 def interval():
     return __weather()["interval"]
+
+
+def __judge_rain():
+    return __weather()["judge_rain"]
+
+
+def judge_rain_rainfall():
+    return __judge_rain()["rainfall"]
+
+
+def judge_rain_observation_before_minutes():
+    return __judge_rain()["observation_before_minutes"]
+
+
+def __message():
+    return __read_setting()["message"]
+
+
+def message_raining():
+    return __message()["raining"]
+
+
+def message_forecast_raining():
+    return __message()["forecast_raining"]

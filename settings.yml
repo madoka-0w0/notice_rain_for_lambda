@@ -5,3 +5,9 @@ need_send_slack:
 weather:
   map_zoom: 13
   interval: 5
+  judge_rain:
+    rainfall: 0.0
+    observation_before_minutes: 10
+message:
+  raining: 雨が降っています。
+  forecast_raining: 雨が{}ごろから降るかもしれません。
