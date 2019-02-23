@@ -12,7 +12,7 @@ class UserTable:
 
     def get_users(self):
         response = self._table.scan()
-        return response
+        return [self.UserModel(user) for user in response.get('Items', [])]
 
     def get_user(self, user_id: int):
         response = self._table.get_item(Key={
@@ -91,4 +91,4 @@ class SystemTable:
 
         @property
         def last_startup(self):
-            return self._item.get(self.LAST_STARTUP)
+            return datetime.strptime(self._item.get(self.LAST_STARTUP), DATETIME_FORMAT)

@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+import logging
 import os
 from datetime import datetime
 
@@ -11,7 +12,6 @@ from model import UserTable, SystemTable
 from slack_helper import Slack
 from weather import WeatherClient, filter_weathers
 
-DATETIME_FORMAT = settings.datetime_format()
 NEED_SEND_SLACK_ELAPSED_HOURS = settings.need_send_slack_elapsed_hours()
 OBSERVATION_BEFORE_MINUTES = settings.judge_rain_observation_before_minutes()
 RAINFALL = settings.judge_rain_rainfall()
@@ -25,45 +25,19 @@ def handler(event, context):
     user_table = UserTable(dynamodb.Table(user_table_name))
     system_table = SystemTable(dynamodb.Table(system_table_name))
     weather_client = WeatherClient(app_id)
-    main_handler = MainRunner(user_table, system_table, weather_client)
-    main_handler.run()
+    main_handler = MainRunner(user_table, system_table, UserRunnerGenerator(weather_client))
+    return main_handler.run()
 
 
-class MainRunner:
-    def __init__(self, table: UserTable, system_table: SystemTable, weather_client: WeatherClient):
-        self.table = table
-        self.system_table = system_table
+class UserRunnerGenerator:
+    def __init__(self, weather_client):
         self.weather_client = weather_client
 
-    def run(self):
-        if self.__need_send_slack():
-            self.update_all_users_need_send_slack()
-        self.system_table.update_last_startup()
-
-        for user in self.table.get_users():
-            try:
-                user = UserTable.UserModel(user)
-                ApplicationRunner(user, self.weather_client,
-                                  Slack(user.slack_url), self.table.update_need_send_slack).run()
-                self.system_table.update_last_startup()
-            except Exception as e:
-                print(e)
-
-    def __need_send_slack(self):
-        """
-        if Difference between last_startup and now is out of NEED_SEND_SLACK_ELAPSED_HOURS,
-        return True
-        :return:
-        """
-        return (datetime.now() - datetime.strptime(self.system_table.get().last_startup,
-                                                   DATETIME_FORMAT)).seconds > 3600 * NEED_SEND_SLACK_ELAPSED_HOURS
-
-    def update_all_users_need_send_slack(self):
-        for user in self.table.get_users():
-            self.table.update_need_send_slack(user.id, True)
+    def new(self, user, slack, change_status):
+        return UserRunner(user, self.weather_client, slack, change_status)
 
 
-class ApplicationRunner:
+class UserRunner:
     def __init__(self, user, weather_client, slack, change_status):
         """
 
@@ -101,7 +75,42 @@ class ApplicationRunner:
             self.change_status(self.user.id, send_slack)
 
 
-def is_raining(weather,compare_date=None):
+class MainRunner:
+    def __init__(self, table: UserTable, system_table: SystemTable, runner_generator: UserRunnerGenerator):
+        self.table = table
+        self.system_table = system_table
+        self.runner_generator = runner_generator
+
+    def run(self):
+        messages = list()
+        if self.__need_send_slack():
+            self.update_all_users_need_send_slack()
+
+        for user in self.table.get_users():
+            try:
+                self.runner_generator.new(user, Slack(user.slack_url), self.table.update_need_send_slack).run()
+            except Exception as e:
+                message = "user id: {}, exception: {}".format(user.id, e)
+                logging.error(message)
+                messages.append(message)
+        self.system_table.update_last_startup()
+
+        return ", ".join(messages) if len(messages) else 'success'
+
+    def __need_send_slack(self):
+        """
+        if Difference between last_startup and now is out of NEED_SEND_SLACK_ELAPSED_HOURS,
+        return True
+        :return:
+        """
+        return (datetime.now() - self.system_table.get().last_startup).seconds > 3600 * NEED_SEND_SLACK_ELAPSED_HOURS
+
+    def update_all_users_need_send_slack(self):
+        for user in self.table.get_users():
+            self.table.update_need_send_slack(user.id, True)
+
+
+def is_raining(weather, compare_date=None):
     """
     If 'weathers' have Rainfall data, return weather Type. (ex. "observation" or "forecast")
 
@@ -118,6 +127,7 @@ def is_raining(weather,compare_date=None):
     def __is_rainfall(weather):
         rainfall = weather.get("Rainfall", 0)
         return rainfall > RAINFALL
+
     if compare_date is None:
         compare_date = datetime.now()
     weather_type = weather["Type"]

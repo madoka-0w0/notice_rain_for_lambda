@@ -1,13 +1,13 @@
 from unittest import TestCase
 from unittest.mock import Mock
 
-from handler import ApplicationRunner, is_raining, create_raining_message
+from handler import UserRunner, is_raining, create_raining_message, MainRunner
 
 
 class TestHandler(TestCase):
-    def test_main(self):
-        weather_client = Mock()
-        weather_client.weather_info.return_value = {
+    def setUp(self):
+        self.weather_client = Mock()
+        self.weather_client.weather_info.return_value = {
             "Feature": [
                 {
                     "Property": {
@@ -84,17 +84,35 @@ class TestHandler(TestCase):
                 }
             ]
         }
-        weather_client.map_url.return_value = ""
+        self.weather_client.map_url.return_value = ""
 
-        user = Mock()
-        user.id = 1
-        user.slack_url = ""
-        user.need_send_slack = True
-        user.latitude = 10
-        user.longitude = 100
+        self.user = Mock()
+        self.user.id = 1
+        self.user.slack_url = ""
+        self.user.need_send_slack = True
+        self.user.latitude = 10
+        self.user.longitude = 100
 
-        app = ApplicationRunner(user, weather_client, Mock(), lambda i, b: None)
+    def test_application_runner(self):
+        app = UserRunner(self.user, self.weather_client, Mock(), lambda i, b: None)
         app.run()
+
+    def test_main_runner(self):
+        user_table = Mock()
+        user_table.get_users.return_value = [self.user]
+        user_table.getuser.return_value = self.user
+
+        system_model = Mock()
+        from datetime import datetime, timedelta
+        system_model.last_startup = datetime.now() - timedelta(days=3)
+        system_table = Mock()
+        system_table.get.return_value = system_model
+        generator = Mock()
+        generator.new.return_value = Mock()
+
+        main_runner = MainRunner(user_table, system_table, generator)
+        ans = main_runner.run()
+        self.assertEqual(ans, "success")
 
     def test_is_raining(self):
         from datetime import datetime
