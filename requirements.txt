@@ -14,5 +14,5 @@ pyyaml==3.13
 s3transfer==0.1.13        # via boto3
 six==1.12.0               # via python-dateutil
 slackweb==1.0.5
-urllib3==1.24.1           # via botocore
+urllib3==1.24.2           # via botocore
 virtualenv==16.1.0        # via lambda-uploader
